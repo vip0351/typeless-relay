@@ -12,9 +12,11 @@ Typeless Relay 是一个面向 Apple Silicon macOS 的本地 TCP 转发工具。
 
 ## 工作原理
 
-Typeless 桌面应用的核心请求会绕过 macOS 系统代理。本项目将 `api.typeless.com` 映射到 `127.0.0.1`，在本机 443 端口接收连接，再通过 Clash 的 SOCKS5 域名请求连接真实服务。
+Typeless 桌面应用的核心请求会绕过 macOS 系统代理。本项目将 `api.typeless.com` 映射到 `127.0.0.1`，在本机 443 端口接收连接，再通过 Clash 的 SOCKS5 连接真实服务（请求中带解析后的 IP 而非域名，避免域名经 hosts 解析回本机形成回环）。
 
-Relay 只搬运原始 TCP 字节，不解密、不替换、也不检查 TLS 内容。
+Relay 同时向代理路和直连路发起竞速，谁先返回响应字节谁获胜，用户数据只经获胜路发出一次。握手探测字节（TLS handshake 记录）会同时发给两路，但不含用户数据。
+
+Relay 只搬运原始 TCP 字节，不解密、不替换、也不检查 TLS 内容；只接受 TLS 连接，非 TLS 流量会被直接拒绝。
 
 ## 使用要求
 

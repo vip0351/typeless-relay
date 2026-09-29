@@ -8,7 +8,7 @@ BINARY = File.join(ROOT, ".build", "release", "typeless-proxy-relay")
 LISTEN_PORT = 18_443
 SOCKS_PORT = 19_090
 TARGET_HOST = "api.typeless.com"
-TARGET_PORT = 443
+TARGET_PORT = 18_444
 
 abort("relay binary missing: #{BINARY}") unless File.executable?(BINARY)
 
@@ -27,9 +27,8 @@ socks_thread = Thread.new do
   socket.write([5, 0].pack("C*"))
 
   header = read_exact(socket, 4).bytes
-  raise "unexpected SOCKS request header: #{header.inspect}" unless header == [5, 1, 0, 3]
-  host_length = read_exact(socket, 1).unpack1("C")
-  host = read_exact(socket, host_length)
+  raise "unexpected SOCKS request header: #{header.inspect}" unless header == [5, 1, 0, 1]
+  host = read_exact(socket, 4).bytes.join(".")
   port = read_exact(socket, 2).unpack1("n")
   observed_target << [host, port]
 
@@ -52,6 +51,7 @@ relay_pid = Process.spawn(
   "--socks-port", SOCKS_PORT.to_s,
   "--target-host", TARGET_HOST,
   "--target-port", TARGET_PORT.to_s,
+  "--direct-ipv4", "127.0.0.1",
   out: File::NULL,
   err: File::NULL
 )
@@ -70,12 +70,14 @@ begin
     end
   end
 
-  client.write("typeless-relay-test")
-  echoed = read_exact(client, "typeless-relay-test".bytesize)
-  raise "unexpected relay payload: #{echoed.inspect}" unless echoed == "typeless-relay-test"
+  # relay only speaks to TLS handshakes; wrap the payload as a handshake record
+  payload = [0x16, 0x0301, "typeless-relay-test".bytesize].pack("C n n") + "typeless-relay-test"
+  client.write(payload)
+  echoed = read_exact(client, payload.bytesize)
+  raise "unexpected relay payload: #{echoed.inspect}" unless echoed == payload
 
   target = Timeout.timeout(2) { observed_target.pop }
-  raise "unexpected target: #{target.inspect}" unless target == [TARGET_HOST, TARGET_PORT]
+  raise "unexpected target: #{target.inspect}" unless target == ["127.0.0.1", TARGET_PORT]
 
   puts "PASS: SOCKS5 domain target and bidirectional relay"
 ensure
