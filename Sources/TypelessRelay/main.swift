@@ -480,6 +480,11 @@ func racePath(
             return
         }
         FileHandle.standardError.write(Data("race: \(name) won\n".utf8))
+        // Disarm the race deadline before pumping: it was only meant to bound
+        // the probe wait. Left armed, it kills the connection whenever the
+        // server stays silent longer than the deadline (e.g. slow LLM/ASR
+        // processing), which surfaces as flaky voice and "network unstable".
+        setSocketTimeout(upstream, seconds: 0)
         do {
             try writeAll(client, bytes: Array(first[0..<received]))
             pump(client: client, upstream: upstream)

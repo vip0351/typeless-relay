@@ -25,6 +25,8 @@ USER  = tls_record(0x17, "USER-DATA-PAYLOAD!")
 # Fake backend: TLS-agnostic TCP server that records every byte it receives.
 # mode :echo    - echoes bytes back (healthy path)
 # mode :silent  - accepts and records but never responds (zombie / black hole)
+# mode :slow    - echoes promptly (wins the race), then stalls for a long time
+#                 before sending a late response (slow server-side processing)
 class Backend
   attr_reader :target_host, :target_port
 
@@ -67,7 +69,11 @@ class Backend
     loop do
       chunk = socket.readpartial(16 * 1024)
       @mutex.synchronize { @received << chunk }
-      socket.write(chunk) if @mode == :echo
+      socket.write(chunk) if @mode == :echo || @mode == :slow
+      if @mode == :slow
+        sleep 4
+        socket.write("LATE-RESPONSE")
+      end
     end
   rescue EOFError, Errno::ECONNRESET, IOError
     nil
@@ -228,9 +234,30 @@ def scenario_t6_early_data_winner_only
   puts "PASS: T6 early data (0x17) reaches winner only"
 end
 
+# T7: the race winner goes silent for longer than the race deadline after the
+# handshake (server-side processing, e.g. an LLM composing). The connection
+# must survive the silence and deliver the late response. Regression: the race
+# used to leave its ~2s receive timeout armed on the winner socket, so any
+# server silence longer than that killed the response ("无法完成写作" / flaky
+# voice with repeated retries during slow periods).
+def scenario_t7_slow_winner_survives_silence
+  socks = Backend.new(port: 27_090, mode: :slow, socks: true)
+  direct = Backend.new(port: 27_444, mode: :silent)
+  with_relay(listen_port: 27_443, socks_port: 27_090, direct_port: 27_444) do |client|
+    client.write(PROBE)
+    expected = PROBE + "LATE-RESPONSE"
+    got = Timeout.timeout(10) { read_exact(client, expected.bytesize) }
+    raise "late response lost, got: #{got.inspect}" unless got == expected
+  end
+  socks.close
+  direct.close
+  puts "PASS: T7 winner survives long server-side silence; late response delivered"
+end
+
 scenario_t1_zombie_proxy_falls_back_to_direct
 scenario_t2_refused_direct_falls_back_to_proxy
 scenario_t3_both_dead_fails_fast
 scenario_t4_both_healthy_exactly_once
 scenario_t5_non_tls_refused
 scenario_t6_early_data_winner_only
+scenario_t7_slow_winner_survives_silence
